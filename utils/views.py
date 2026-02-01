@@ -1,7 +1,7 @@
 import discord
-import gc
 from discord.ext import commands
 from datetime import datetime
+
 
 class QueuePages(discord.ui.View):
     def __init__(self, ctx: commands.Context, pages: list, current_page: int = 0):
@@ -99,15 +99,17 @@ class NowPlayingButtons(discord.ui.View):
             await ctx.voice_state.update_queue_message()
             ctx.voice_state.action_message = f"**{interaction.user.display_name} shuffled the queue.**"
             await ctx.voice_state.update_now_playing_embed()
-            gc.collect()
             await interaction.response.defer()  # Defer interaction response after handling
 
     async def queue_callback(self, interaction: discord.Interaction):
-        ctx = self.ctx
-        if ctx.voice_state and ctx.voice_state.is_playing:
-            await ctx.invoke(ctx.bot.get_command('queue'))
-        await interaction.response.edit_message(view=NowPlayingButtons(ctx))
-
+        # IMPORTANT: do not reuse the original slash-command Context stored on the View.
+        # Interaction follow-up webhooks expire (~15 min), which causes "Invalid Webhook" errors.
+        # Instead, build a fresh Context from *this* button interaction.
+        if self.ctx.voice_state and self.ctx.voice_state.is_playing:
+            new_ctx = await commands.Context.from_interaction(interaction)
+            await new_ctx.invoke(new_ctx.bot.get_command('queue'))
+        # Refresh the controls on the now playing message
+        await interaction.response.edit_message(view=NowPlayingButtons(self.ctx))
 
     async def skip_callback(self, interaction: discord.Interaction):
         ctx = self.ctx
@@ -120,8 +122,16 @@ class NowPlayingButtons(discord.ui.View):
     async def clear_callback(self, interaction: discord.Interaction):
         ctx = self.ctx
         if ctx.voice_state and ctx.voice_state.is_playing:
-            confirmation_message = await ctx.send("Are you sure you want to clear the queue?", view=ClearQueueConfirmation(ctx, ctx.voice_state))
-        await interaction.response.defer()  # Defer interaction response after handling
+            view = ClearQueueConfirmation(ctx, ctx.voice_state)
+            # Send via the *current* interaction to avoid expired webhook tokens.
+            if interaction.response.is_done():
+                await interaction.followup.send("Are you sure you want to clear the queue?", view=view)
+            else:
+                await interaction.response.send_message("Are you sure you want to clear the queue?", view=view)
+            return
+        # Nothing to do; just acknowledge
+        if not interaction.response.is_done():
+            await interaction.response.defer()
 
     async def volume_up_callback(self, interaction: discord.Interaction):
         ctx = self.ctx
@@ -158,7 +168,6 @@ class ClearQueueConfirmation(discord.ui.View):
         self.voice_state.songs.clear()
         await self.voice_state.update_queue_message()
         await interaction.response.edit_message(content="The queue has been cleared.", view=None)
-        gc.collect()
 
     @discord.ui.button(label="No", style=discord.ButtonStyle.secondary)
     async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
