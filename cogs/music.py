@@ -253,10 +253,24 @@ class Music(commands.Cog):
 
         view = QueuePages(ctx, embeds, current_page=requested_page - 1)
 
-        if ctx.voice_state.queue_message:
-            await ctx.voice_state.queue_message.edit(embed=embeds[requested_page - 1], view=view)
-        else:
-            ctx.voice_state.queue_message = await ctx.send(embed=embeds[requested_page - 1], view=view)
+        try:
+            ctx.voice_state.queue_message = await ctx.voice_state._normalize_message(ctx.voice_state.queue_message)
+            if ctx.voice_state.queue_message:
+                ctx.voice_state.queue_message = await ctx.voice_state.queue_message.edit(
+                    embed=embeds[requested_page - 1], view=view
+                )
+            else:
+                ctx.voice_state.queue_message = await ctx.send(embed=embeds[requested_page - 1], view=view)
+                ctx.voice_state.queue_message = await ctx.voice_state._normalize_message(ctx.voice_state.queue_message)
+        except discord.HTTPException as e:
+            if e.status == 401:
+                ctx.voice_state.queue_message = None
+                ctx.voice_state.queue_message = await ctx.send(embed=embeds[requested_page - 1], view=view)
+                ctx.voice_state.queue_message = await ctx.voice_state._normalize_message(ctx.voice_state.queue_message)
+            else:
+                raise
+
+        view.message = ctx.voice_state.queue_message
 
     @commands.hybrid_command(name="clear", description="Clears the queue.")
     async def _clear(self, ctx: commands.Context):

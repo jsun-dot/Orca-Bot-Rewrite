@@ -5,7 +5,7 @@ from datetime import datetime
 
 class QueuePages(discord.ui.View):
     def __init__(self, ctx: commands.Context, pages: list, current_page: int = 0):
-        super().__init__(timeout=1800)  # Set timeout to 5 minutes
+        super().__init__(timeout=None)  # 30 minutes of inactivity
         self.ctx = ctx
         self.pages = pages
         self.current_page = current_page
@@ -50,7 +50,8 @@ class QueuePages(discord.ui.View):
 
 class NowPlayingButtons(discord.ui.View):
     def __init__(self, ctx: commands.Context):
-        super().__init__(timeout=1800)  # Set timeout to 5 minutes
+        # Keep controls alive while the bot is running.
+        super().__init__(timeout=None)
         self.ctx = ctx
         self.message = None  # To store the message object
 
@@ -109,7 +110,12 @@ class NowPlayingButtons(discord.ui.View):
             new_ctx = await commands.Context.from_interaction(interaction)
             await new_ctx.invoke(new_ctx.bot.get_command('queue'))
         # Refresh the controls on the now playing message
-        await interaction.response.edit_message(view=NowPlayingButtons(self.ctx))
+        view = NowPlayingButtons(self.ctx)
+        view.message = interaction.message
+        if interaction.response.is_done():
+            await interaction.message.edit(view=view)
+        else:
+            await interaction.response.edit_message(view=view)
 
     async def skip_callback(self, interaction: discord.Interaction):
         ctx = self.ctx

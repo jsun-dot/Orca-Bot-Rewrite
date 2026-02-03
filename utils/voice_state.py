@@ -67,6 +67,16 @@ class VoiceState:
         self.lock = asyncio.Lock()
         self.last_activity = datetime.utcnow()
 
+    async def _normalize_message(self, message: discord.Message | None) -> discord.Message | None:
+        if message is None:
+            return None
+        if isinstance(message, discord.InteractionMessage):
+            try:
+                return await message.channel.fetch_message(message.id)
+            except Exception:
+                return message
+        return message
+
     async def add_song(self, song):
         await self.songs.put(song)
         await self.add_song_message(song)
@@ -175,11 +185,13 @@ class VoiceState:
 
         if self.queue_message:
             try:
-                await self.queue_message.edit(
-                    content="Bot disconnected from the voice channel. Stopping playback.",
-                    embed=None,
-                    view=None,
-                )
+                self.queue_message = await self._normalize_message(self.queue_message)
+                if self.queue_message:
+                    await self.queue_message.edit(
+                        content="Bot disconnected from the voice channel. Stopping playback.",
+                        embed=None,
+                        view=None,
+                    )
             except Exception:
                 pass
 
@@ -213,21 +225,30 @@ class VoiceState:
         channel = self.text_channel or ctx.channel
 
         try:
+            self.queue_message = await self._normalize_message(self.queue_message)
             if self.queue_message:
-                await self.queue_message.edit(embed=embeds[0], view=view)
+                self.queue_message = await self.queue_message.edit(embed=embeds[0], view=view)
             else:
                 self.queue_message = await channel.send(embed=embeds[0], view=view)
+            view.message = self.queue_message
         except discord.errors.HTTPException as e:
             if e.status == 401:
                 logging.error("Invalid Webhook Token. Unable to edit queue message.")
                 self.queue_message = None
+                try:
+                    self.queue_message = await channel.send(embed=embeds[0], view=view)
+                    view.message = self.queue_message
+                except Exception:
+                    pass
             else:
                 raise
 
     async def ensure_queue_message_valid(self):
         if self.queue_message:
             try:
-                await self.queue_message.edit(content="Queue updated.")
+                self.queue_message = await self._normalize_message(self.queue_message)
+                if self.queue_message:
+                    await self.queue_message.edit(content="Queue updated.")
             except discord.NotFound:
                 self.queue_message = None
         await self.update_queue_message()
@@ -242,17 +263,19 @@ class VoiceState:
             embed.add_field(name="Action:", value=self.action_message, inline=False)
 
         channel = (self.now_playing_message.channel if self.now_playing_message else None) or self.text_channel or ctx.channel
+        view = NowPlayingButtons(ctx)
 
         try:
             if self.now_playing_message:
                 self.now_playing_message = await channel.fetch_message(self.now_playing_message.id)
-                await self.now_playing_message.edit(embed=embed, view=NowPlayingButtons(ctx))
+                self.now_playing_message = await self.now_playing_message.edit(embed=embed, view=view)
             else:
-                self.now_playing_message = await channel.send(embed=embed, view=NowPlayingButtons(ctx))
+                self.now_playing_message = await channel.send(embed=embed, view=view)
         except discord.errors.HTTPException as e:
             logging.error(f"Failed to edit message: {e}")
-            self.now_playing_message = await channel.send(embed=embed, view=NowPlayingButtons(ctx))
+            self.now_playing_message = await channel.send(embed=embed, view=view)
 
+        view.message = self.now_playing_message
         self.action_message = ""
 
     async def inactivity_timer(self):
