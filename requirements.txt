@@ -27,4 +27,4 @@ urllib3==2.2.2
 values==2020.12.3
 yarl==1.9.4
 youtube-dl==2021.12.17
-yt-dlp==2024.08.01
+yt-dlp==2026.1.31
