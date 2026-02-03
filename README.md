@@ -11,9 +11,9 @@ This repository contains open-source code for my Discord bot named **Orca**. Thi
 
 ---
 
-## Testing Branch
+## Development Branch
 
-This repository uses a `testing` branch for **testing and validation** before changes are merged into the mainline branch.
+This repository uses a `development` branch for **testing and validation** before changes are merged into the mainline branch.
 
 ### What goes here
 - Experimental changes
