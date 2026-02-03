@@ -144,8 +144,8 @@ class VoiceState:
             await self.next.wait()
 
             if self.loop and self.current:
-                await self.songs.put(self.current)
-                logging.info("Looping the current song.")
+                # Loop by replaying the current track without re-queuing it.
+                logging.info("Looping the current song (replay without re-queue).")
             else:
                 self.current = None
 

@@ -30,30 +30,11 @@ log = logging.getLogger(__name__)
 # Required env vars:
 #   SPOTIPY_CLIENT_ID
 #   SPOTIPY_CLIENT_SECRET
-try:
-    from dotenv import load_dotenv  # type: ignore
-
-    load_dotenv()
-except Exception:
-    # If python-dotenv isn't installed, we just rely on the process environment.
-    pass
-
 SPOTIPY_CLIENT_ID = os.getenv("SPOTIPY_CLIENT_ID")
 SPOTIPY_CLIENT_SECRET = os.getenv("SPOTIPY_CLIENT_SECRET")
 
-if not SPOTIPY_CLIENT_ID or not SPOTIPY_CLIENT_SECRET:
-    raise RuntimeError(
-        "Missing Spotify credentials. Set SPOTIPY_CLIENT_ID and SPOTIPY_CLIENT_SECRET in your environment (or a .env file in the project root)."
-    )
-
-sp = spotipy.Spotify(
-    auth_manager=SpotifyClientCredentials(
-        client_id=SPOTIPY_CLIENT_ID,
-        client_secret=SPOTIPY_CLIENT_SECRET,
-    ),
-    # Spotipy expects a requests.Session (not a boolean). Using a real session also reduces overhead.
-    requests_session=requests.Session(),
-)
+# NOTE: Do not hard-fail at import time. Spotify is optional and only required
+# when a Spotify playlist is invoked.
 
 # Delay between YouTube source resolutions when adding Spotify playlists.
 SPOTIFY_PLAYLIST_RESOLVE_DELAY_SEC = 20
@@ -65,6 +46,38 @@ class Music(commands.Cog):
         self.voice_states: dict[int, VoiceState] = {}
         self.processing_playlists: set[int] = set()  # guild ids currently processing a Spotify playlist
         self._playlist_locks = defaultdict(asyncio.Lock)  # per-guild lock to avoid interleaving playlist enqueues
+        self._spotify = None  # lazy-initialized Spotipy client
+
+    def _get_spotify(self):
+        """Lazy-init Spotify client. Only errors when Spotify features are used."""
+        if self._spotify is not None:
+            return self._spotify
+
+        # Re-load env in case this process was started before vars were set.
+        try:
+            from dotenv import load_dotenv  # type: ignore
+
+            load_dotenv()
+        except Exception:
+            pass
+
+        client_id = os.getenv("SPOTIPY_CLIENT_ID")
+        client_secret = os.getenv("SPOTIPY_CLIENT_SECRET")
+
+        if not client_id or not client_secret:
+            raise commands.CommandError(
+                "Spotify is not configured. Set SPOTIPY_CLIENT_ID and SPOTIPY_CLIENT_SECRET (or add them to a .env file) to use Spotify playlists."
+            )
+
+        # Create the Spotipy client (Spotipy expects a requests.Session)
+        self._spotify = spotipy.Spotify(
+            auth_manager=SpotifyClientCredentials(
+                client_id=client_id,
+                client_secret=client_secret,
+            ),
+            requests_session=requests.Session(),
+        )
+        return self._spotify
 
     def get_voice_state(self, ctx: commands.Context):
         state = self.voice_states.get(ctx.guild.id)
@@ -272,12 +285,16 @@ class Music(commands.Cog):
         await self.ensure_voice_state(ctx)
         await self._maybe_defer(ctx)
 
-        if len(ctx.voice_state.songs) == 0:
+        q_len = len(ctx.voice_state.songs)
+        if q_len == 0:
             return await ctx.send("Empty queue.")
+
+        if index < 1 or index > q_len:
+            return await ctx.send(f"Invalid index. Choose a number from 1 to {q_len}.")
 
         ctx.voice_state.songs.remove(index - 1)
         await ctx.voice_state.update_queue_message()
-        await ctx.send("Successfully removed from the queue.")
+        await ctx.send(f"Removed item #{index} from the queue.")
 
     @commands.hybrid_command(name="play", description="Plays audio.")
     async def _play(self, ctx: commands.Context, *, search: str):
@@ -296,8 +313,11 @@ class Music(commands.Cog):
             async with ctx.typing():
                 # Spotify playlist
                 if "spotify.com/playlist" in search:
-                    await self.play_spotify_playlist(ctx, search)
-                    await ctx.send("Your Spotify playlist has been added to the queue.")
+                    try:
+                        await self.play_spotify_playlist(ctx, search)
+                        await ctx.send("Your Spotify playlist has been added to the queue.")
+                    except commands.CommandError as e:
+                        await ctx.send(str(e))
                     return
 
                 # Clean search string
@@ -335,6 +355,7 @@ class Music(commands.Cog):
         """Fetch Spotify playlist name + tracks in a thread (Spotipy is blocking)."""
 
         def _run():
+            sp = self._get_spotify()
             playlist = sp.playlist(playlist_id)
             name = playlist.get("name", "Spotify playlist")
 
